@@ -1,4 +1,4 @@
-const csvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8ovJJRjyH72GlgMo5GawzsSWRSNd0Fq_FDAvdTcia8Vh3bo9HKzQSA9-R6jGdiEiDuyQjQNZM-SnF/pub?output=csv";
+const csvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQaVGkMjzD_21PrjnGZHvtWvkPLi0C3QcemJmdZHqGgWLkqqh10K3EfSrz_h9fTRfc0fZMF4EFhMzfb/pub?output=csv";
 let rawData = [];
 let yearsSet = new Set();
 let allData = [];
@@ -7,14 +7,51 @@ let map;
 let monthChartInstance = null;
 let eventTypeChartInstance = null;
 
-// Gestió dels desplegables
+const eventCategories = [
+    { min: 1, max: 5, color: "rgba(247, 170, 170, 1)", label: "1-5 esdeveniments" },
+    { min: 6, max: 10, color: "rgba(255, 145, 145, 0.8)", label: "6-10 esdeveniments" },
+    { min: 11, max: 25, color: "rgba(253, 88, 88, 0.9)", label: "11-25 esdeveniments" },
+    { min: 26, max: 50, color: "rgba(252, 52, 52, 0.95)", label: "26-50 esdeveniments" },
+    { min: 51, max: Infinity, color: "rgba(153, 35, 16, 1)", label: "+ 50 esdeveniments" }
+];
+
+function getEventCategory(count) {
+    return eventCategories.find(category => count >= category.min && count <= category.max) || eventCategories[0];
+}
+
+function updateLegend() {
+    const existingLegend = document.querySelector('.map-legend');
+    if (existingLegend) {
+        existingLegend.remove();
+    }
+    
+    const legend = L.control({position: 'bottomright'});
+    
+    legend.onAdd = function (map) {
+        const div = L.DomUtil.create('div', 'map-legend');
+        div.innerHTML = '<h4>Esdeveniments per municipi</h4>';
+        
+        eventCategories.forEach(category => {
+            div.innerHTML += `
+                <div class="legend-item">
+                    <span class="legend-color" style="background:${category.color}"></span>
+                    <span>${category.label}</span>
+                </div>
+            `;
+        });
+        
+        return div;
+    };
+    
+    legend.addTo(map);
+}
+
 document.querySelectorAll('.toggle-title').forEach(el => {
     el.addEventListener('click', function() {
         const box = this.parentElement;
         const content = this.nextElementSibling;
         const isOpen = box.classList.contains('open');
 
-        // Tancar altres desplegables oberts
         if (!isOpen) {
             document.querySelectorAll('.toggle-box.open').forEach(openBox => {
                 if (openBox !== box) {
@@ -26,11 +63,9 @@ document.querySelectorAll('.toggle-title').forEach(el => {
             });
         }
         
-        // Mostrar/amagar el contingut actual
         content.style.display = isOpen ? 'none' : 'block';
         box.classList.toggle('open');
         
-        // Canviar icona
         const icon = this.querySelector('.toggle-icon i');
         if (box.classList.contains('open')) {
             icon.classList.replace('fa-plus', 'fa-minus');
@@ -38,14 +73,12 @@ document.querySelectorAll('.toggle-title').forEach(el => {
             icon.classList.replace('fa-minus', 'fa-plus');
         }
 
-        // Ajustar mapa si s'obre el seu contenidor
         if (box.querySelector('#map') && !isOpen) {
             setTimeout(() => { if (map) map.invalidateSize(); }, 10);
         }
     });
 });
 
-// Actualitzar estadístiques
 let stats = { totalEvents: 0, totalMunicipalities: 0, totalPromotors: 0 };
 function updateStats() {
     document.getElementById('total-events').textContent = stats.totalEvents;
@@ -53,25 +86,20 @@ function updateStats() {
     document.getElementById('total-promotors').textContent = stats.totalPromotors;
 }
 
-// Funció per normalitzar noms de municipis
 function normalizeMunicipalityName(name) {
     if (!name) return "";
-    // Convertir a minúscules, treure accents i espais extra
     return name.toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Treure accents
-        .replace(/\s+/g, ' ') // Reemplaçar múltiples espais per un sol
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, ' ')
         .trim();
 }
 
-// Funció per processar entitats promotores
 function getUniqueEntities(entitiesString) {
     if (!entitiesString) return new Set();
-    // Dividir per comes i eliminar espais en blanc
     const entities = entitiesString.split(',').map(e => e.trim()).filter(e => e);
     return new Set(entities);
 }
 
-// Inicialitzar mapa
 function initMap(){
     map = L.map('map').setView([40.95, 0.65], 9);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -79,59 +107,79 @@ function initMap(){
     }).addTo(map);
     markersGroup = L.layerGroup().addTo(map);
 
-    // Carregar dades CSV
-    Papa.parse(csvUrl, {
-        download: true, 
-        header: true,
-        complete: function(results) {
-            allData = results.data.filter(row => row["Nom"] && row["Nom"].trim() !== "");
-            stats.totalEvents = allData.length;
+    // Dins de la funció initMap(), a la part del Papa.parse complete:
+Papa.parse(csvUrl, {
+    download: true, 
+    header: true,
+    complete: function(results) {
+        // Filtrar només esdeveniments (excloure activitats orgàniques)
+        allData = results.data.filter(row => 
+            row["Nom"] && row["Nom"].trim() !== "" && row["Tipus"] === "Esdeveniments"
+        );
+        
+        stats.totalEvents = allData.length;
+        
+        const uniqueMunicipalities = new Set();
+        const uniquePromotors = new Set(); 
+        const presidentPeriodMap = new Map();
+        
+        allData.forEach(row => {
+            if (row["Localització"]?.trim()) {
+                const normalizedName = normalizeMunicipalityName(row["Localització"]);
+                uniqueMunicipalities.add(normalizedName);
+            }
             
-            const uniqueMunicipalities = new Set();
-            const uniquePromotors = new Set(); // Ara per entitats promotores
-            const uniquePresidents = new Set(); // Per al filtre de presidents
+            if (row["Nom entitat promotora"]?.trim()) {
+                const entities = getUniqueEntities(row["Nom entitat promotora"]);
+                entities.forEach(ent => uniquePromotors.add(ent));
+            }
             
-            allData.forEach(row => {
-                if (row["Localització"]?.trim()) {
-                    // Usar el nom normalitzat per evitar duplicats
-                    const normalizedName = normalizeMunicipalityName(row["Localització"]);
-                    uniqueMunicipalities.add(normalizedName);
-                }
+            // Processar presidents amb període
+            if (row["Presidents"]?.trim() && row["Període"]?.trim()) {
+                const president = row["Presidents"].trim();
+                const period = row["Període"].trim();
+                const key = `${president}|${period}`;
                 
-                // Processar entitats promotores
-                if (row["Nom entitat promotora"]?.trim()) {
-                    const entities = getUniqueEntities(row["Nom entitat promotora"]);
-                    entities.forEach(ent => uniquePromotors.add(ent));
+                if (!presidentPeriodMap.has(key)) {
+                    presidentPeriodMap.set(key, {
+                        president: president,
+                        period: period
+                    });
                 }
-                
-                // Processar presidents per al filtre
-                if (row["Presidents"]?.trim()) uniquePresidents.add(row["Presidents"].trim());
-            });
-            
-            stats.totalMunicipalities = uniqueMunicipalities.size;
-            stats.totalPromotors = uniquePromotors.size;
-            updateStats();
+            }
+        });
+        
+        stats.totalMunicipalities = uniqueMunicipalities.size;
+        stats.totalPromotors = uniquePromotors.size;
+        updateStats();
 
-            // Omplir select de presidents
-            const select = document.getElementById('promotorSelect');
-            uniquePresidents.forEach(promotor => {
-                const option = document.createElement("option");
-                option.value = promotor;
-                option.text = promotor;
-                select.appendChild(option);
-            });
+        const select = document.getElementById('promotorSelect');
+        
+        // Netejar select previ per evitar duplicats
+        select.innerHTML = '';
+        
+        // Afegir opció "Tots" (només una vegada)
+        const allOption = document.createElement("option");
+        allOption.value = "Tots";
+        allOption.text = "Tots els presidents";
+        select.appendChild(allOption);
+        
+        // Afegir opcions per a cada combinació president-període
+        presidentPeriodMap.forEach((value, key) => {
+            const option = document.createElement("option");
+            option.value = key;
+            option.text = `${value.president} ${value.period}`;
+            select.appendChild(option);
+        });
 
-            // Dibuixar marcadors inicials
-            drawMarkers("Tots");
-            
-            // Event de canvi en el select
-            select.addEventListener("change", () => drawMarkers(select.value));
-        }
-    });
+        drawMarkers("Tots");
+        
+        select.addEventListener("change", () => drawMarkers(select.value));
+    }
+});
 }
 
-// Dibuixar marcadors al mapa
-function drawMarkers(promotorFilter) {
+function drawMarkers(presidentPeriodFilter) {
     markersGroup.clearLayers();
     const municipis = {};
 
@@ -140,13 +188,15 @@ function drawMarkers(promotorFilter) {
             const nomOriginal = row["Localització"]?.trim();
             if (!nomOriginal) return;
 
-            const promotor = row["Presidents"] ? row["Presidents"].trim() : "";
-
-            if (promotorFilter === "Tots" || promotor === promotorFilter) {
+            const president = row["Presidents"] ? row["Presidents"].trim() : "";
+            const period = row["Període"] ? row["Període"].trim() : "";
+            const currentKey = president && period ? `${president}|${period}` : "";
+            
+            // Filtrar per president i període
+            if (presidentPeriodFilter === "Tots" || currentKey === presidentPeriodFilter) {
                 const lat = parseFloat(row.Latitud.replace(",", "."));
                 const lon = parseFloat(row.Longitud.replace(",", "."));
                 if (!isNaN(lat) && !isNaN(lon)) {
-                    // Usar el nom normalitzat per agrupar correctament
                     const normalizedName = normalizeMunicipalityName(nomOriginal);
                     
                     if (!municipis[normalizedName]) {
@@ -154,7 +204,7 @@ function drawMarkers(promotorFilter) {
                             lat, 
                             lon, 
                             count: 0,
-                            name: nomOriginal  // Guardar el nom original per mostrar
+                            name: nomOriginal 
                         };
                     }
                     municipis[normalizedName].count++;
@@ -163,98 +213,149 @@ function drawMarkers(promotorFilter) {
         }
     });
 
-    // Afegir marcadors al mapa amb mida fixa
     Object.entries(municipis).forEach(([normalizedName, m]) => {
+        const category = getEventCategory(m.count);
+        
         L.circleMarker([m.lat, m.lon], {
-            radius: 6, // Mida fixa per a totes les esferes
-            fillColor: "#9F3222", 
+            radius: 6,
+            fillColor: category.color,
             color: "#fff",
             weight: 2, 
             opacity: 1, 
             fillOpacity: 0.8
         }).addTo(markersGroup)
-            .bindPopup(`<div class="popup-grid"><div class="popup-title">${m.name}</div><div class="popup-icon"><i class="fas fa-calendar-alt"></i></div><div class="popup-text"><span class="popup-label">Esdeveniments</span><span class="popup-value">${m.count}</span></div></div>`);
+            .bindPopup(`<div class="popup-grid"><div class="popup-title">${m.name}</div><div class="popup-icon"><i class="fas fa-calendar-alt"></i></div><div class="popup-text"><span class="popup-label">Esdeveniments</span><span class="popup-value">${m.count}</span></div><div class="popup-category">${category.label}</div></div>`);
     });
+    
+    updateLegend();
 }
 
-// Obtenir dades per a gràfics
 async function fetchData(){
     const response = await fetch(csvUrl);
     const text = await response.text();
     const p_results = Papa.parse(text, { header: true });
+    
+    // Filtrar només esdeveniments (excloure activitats orgàniques)
     rawData = p_results.data
-        .filter(d => /^\d{4}$/.test(d['Any inici']) && /^\d{1,2}$/.test(d['Mes inici']))
+        .filter(d => 
+            /^\d{4}$/.test(d['Any inici']) && 
+            /^\d{1,2}$/.test(d['Mes inici']) && 
+            d['Tipus'] === 'Esdeveniments'
+        )
         .map(d => ({
             any: d['Any inici'], 
             mes: d['Mes inici'],
-            tipus: d['Tipus d\'esdeveniment'] || 'Sense especificar'
+            tipus: d['Tipus d\'esdeveniment'] || 'Sense especificar',
+            cere: d['CERE'] ? d['CERE'].trim() : ''  
         }));
+        
     rawData.forEach(d => yearsSet.add(d.any));
 }
 
-// Crear gràfic de barres per any
 function drawYearChart(){
-    const counts = {};
-    rawData.forEach(d => { counts[d.any] = (counts[d.any] || 0) + 1; });
+    const counts = {};  
+    rawData.forEach(d => {
+        if (!counts[d.any]) {
+            counts[d.any] = { total: 0, impulsor: 0, colaborador: 0 };
+        }
+        counts[d.any].total++;
+
+        if (d.cere.toLowerCase().includes("impulsor")) {
+            counts[d.any].impulsor++;
+        } else if (d.cere.toLowerCase().includes("col·laborador") || d.cere.toLowerCase().includes("col.laborador")) {
+            counts[d.any].colaborador++;
+        }
+    });
+
     const years = Array.from(yearsSet).sort();
-    const values = years.map(y => counts[y] || 0);
+    const impulsors = years.map(y => counts[y] ? counts[y].impulsor : 0);
+    const colaboradors = years.map(y => counts[y] ? counts[y].colaborador : 0);
 
     new Chart(document.getElementById('yearChart'), {
-        type:'bar', 
-        data:{ 
-            labels:years, 
-            datasets:[{ 
-                label:"Esdeveniments", 
-                data:values, 
-                backgroundColor:'rgba(159, 50, 34, 0.8)', 
-                borderColor:'rgba(159, 50, 34, 1)', 
-                borderWidth:1, 
-                borderRadius:4 
-            }] 
-        },
-        options:{ 
-            responsive:true, 
-            maintainAspectRatio: true, 
-            scales:{ 
-                y:{ 
-                    beginAtZero:true, 
-                    ticks:{ 
-                        stepSize:1, 
-                        color:'#9F3222' 
-                    } 
-                }, 
-                x:{ 
-                    ticks:{ 
-                        color:'#9F3222' 
-                    } 
-                } 
-            } 
+            type: 'bar',
+            data: {
+                labels: years,
+                datasets: [
+                    {
+                        label: "Impulsor",
+                        data: impulsors,
+                        backgroundColor: 'rgba(159, 50, 34, 0.8)',
+                        borderColor: 'rgba(159, 50, 34, 1)',
+                        borderWidth: 1,
+                        borderRadius: 4
+                    },
+                    {
+                        label: "Col·laborador",
+                        data: colaboradors,
+                        backgroundColor: 'rgba(220, 110, 90, 0.8)',
+                        borderColor: 'rgba(220, 110, 90, 1)',
+                        borderWidth: 1,
+                        borderRadius: 4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: "Esdeveniments per any on el CERE ha estat impulsor / col·laborador"
+                    },
+                    tooltip: {
+                        callbacks: {
+                            title: function(context) {
+                                // Mostrar l'any al títol del tooltip
+                                return `Any: ${context[0].label}`;
+                            },
+                            beforeBody: function(context) {
+                                // Afegir el TOTAL abans de les dades de les barres
+                                const year = context[0].label;
+                                return `Total esdeveniments: ${counts[year].total}`;
+                            },
+                            label: function(context) {
+                                // Informació normal de cada dataset
+                                return `${context.dataset.label}: ${context.raw}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        stacked: true,
+                        ticks: { stepSize: 1, color: '#9F3222' }
+                    },
+                    x: {
+                        stacked: true,
+                        ticks: { color: '#9F3222' }
+                    }
+                }
+            }
+        });
+    }
+
+function fillYearSelects(){
+    const years = Array.from(yearsSet).sort();
+    
+    const yearSelect = document.getElementById('yearSelect');
+    const eventTypeSelect = document.getElementById('eventTypeYearSelect');
+
+    years.forEach(y => {
+        if (y >= 2011) {
+            const opt1 = document.createElement('option');
+            opt1.value = y; 
+            opt1.textContent = y;
+            yearSelect.appendChild(opt1);
+
+            const opt2 = document.createElement('option');
+            opt2.value = y; 
+            opt2.textContent = y;
+            eventTypeSelect.appendChild(opt2);
         }
     });
 }
 
-// Omplir select d'anys per a tots els gràfics
-function fillYearSelects(){
-    const years = Array.from(yearsSet).sort();
-    
-    // Omplir selector per a gràfic mensual
-    const monthSelect = document.getElementById('yearSelect');
-    years.forEach(y => {
-        const opt = document.createElement('option');
-        opt.value = y; opt.textContent = y;
-        monthSelect.appendChild(opt);
-    });
-    
-    // Omplir selector per a gràfic de tipus
-    const eventTypeSelect = document.getElementById('eventTypeYearSelect');
-    years.forEach(y => {
-        const opt = document.createElement('option');
-        opt.value = y; opt.textContent = y;
-        eventTypeSelect.appendChild(opt);
-    });
-}
-
-// Crear gràfic de línies per mes
 function drawMonthChart(selectedYear='all'){
     const mesosNom = ['Gen','Febr','Març','Abr','Maig','Juny','Jul','Ago','Set','Oct','Nov','Des'];
     const filt = selectedYear === 'all' ? rawData : rawData.filter(d => d.any === selectedYear);
@@ -284,50 +385,38 @@ function drawMonthChart(selectedYear='all'){
             maintainAspectRatio: true, 
             scales: { 
                 y: { 
-                    ticks: { 
-                        color: '#9F3222' 
-                    } 
+                    ticks: { color: '#9F3222' } 
                 }, 
                 x: { 
-                    ticks: { 
-                        color: '#9F3222' 
-                    } 
+                    ticks: { color: '#9F3222' } 
                 } 
             } 
         }
     });
 }
 
-// Funció per crear el gràfic de tipus d'esdeveniments
 function drawEventTypeChart(selectedYear='all') {
-    // Filtrar dades segons l'any seleccionat
     const filteredData = selectedYear === 'all' 
         ? rawData 
         : rawData.filter(d => d.any === selectedYear);
     
-    // Comptar la freqüència de cada tipus d'esdeveniment
     const typeCounts = {};
     filteredData.forEach(event => {
-        // Normalitzar el tipus d'esdeveniment per agrupar millor
         const eventType = event.tipus.trim() || 'Sense especificar';
         typeCounts[eventType] = (typeCounts[eventType] || 0) + 1;
     });
     
-    // Ordenar els tipus per freqüència descendent
     const sortedTypes = Object.entries(typeCounts)
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 10); // Mostrar només els 10 principals
+        .slice(0, 10);
     
-    // Extreure etiquetes i valors
     const labels = sortedTypes.map(item => item[0]);
     const values = sortedTypes.map(item => item[1]);
     
-    // Destruir gràfic anterior si existeix
     if (eventTypeChartInstance) {
         eventTypeChartInstance.destroy();
     }
     
-    // Crear nou gràfic
     const ctx = document.getElementById('eventTypeChart').getContext('2d');
     eventTypeChartInstance = new Chart(ctx, {
         type: 'bar',
@@ -365,49 +454,34 @@ function drawEventTypeChart(selectedYear='all') {
             }]
         },
         options: {
-            indexAxis: 'y', // Barres horitzontals
+            indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: true,
             plugins: {
-                legend: {
-                    display: false
-                },
+                legend: { display: false },
                 title: {
                     display: true,
                     text: `Tipus d'esdeveniments ${selectedYear === 'all' ? '(tots els anys)' : `(${selectedYear})`}`
                 }
             },
             scales: {
-                x: {
-                    ticks: {
-                        color: '#9F3222'
-                    },
-                    beginAtZero: true
-                },
-                y: {
-                    ticks: {
-                        color: '#9F3222'
-                    }
-                }
+                x: { ticks: { color: '#9F3222' }, beginAtZero: true },
+                y: { ticks: { color: '#9F3222' } }
             }
         }
     });
 }
 
-// Event per canviar any en gràfic mensual
 document.getElementById('yearSelect').addEventListener('change', (e) => drawMonthChart(e.target.value));
-
-// Event per canviar any en gràfic de tipus
 document.getElementById('eventTypeYearSelect').addEventListener('change', (e) => drawEventTypeChart(e.target.value));
 
-// Inicialitzar l'aplicació
 async function init(){
     initMap();
     await fetchData();
     fillYearSelects();
     drawYearChart();
     drawMonthChart();
-    drawEventTypeChart(); // Dibuixar el nou gràfic
+    drawEventTypeChart();
 }
 
 document.addEventListener('DOMContentLoaded', init);
