@@ -107,12 +107,10 @@ function initMap(){
     }).addTo(map);
     markersGroup = L.layerGroup().addTo(map);
 
-    // Dins de la funció initMap(), a la part del Papa.parse complete:
 Papa.parse(csvUrl, {
     download: true, 
     header: true,
     complete: function(results) {
-        // Filtrar només esdeveniments (excloure activitats orgàniques)
         allData = results.data.filter(row => 
             row["Nom"] && row["Nom"].trim() !== "" && row["Tipus"] === "Esdeveniments"
         );
@@ -155,16 +153,13 @@ Papa.parse(csvUrl, {
 
         const select = document.getElementById('promotorSelect');
         
-        // Netejar select previ per evitar duplicats
         select.innerHTML = '';
-        
-        // Afegir opció "Tots" (només una vegada)
+    
         const allOption = document.createElement("option");
         allOption.value = "Tots";
         allOption.text = "Tots els presidents";
         select.appendChild(allOption);
-        
-        // Afegir opcions per a cada combinació president-període
+    
         presidentPeriodMap.forEach((value, key) => {
             const option = document.createElement("option");
             option.value = key;
@@ -358,7 +353,10 @@ function fillYearSelects(){
 
 function drawMonthChart(selectedYear='all'){
     const mesosNom = ['Gen','Febr','Març','Abr','Maig','Juny','Jul','Ago','Set','Oct','Nov','Des'];
-    const filt = selectedYear === 'all' ? rawData : rawData.filter(d => d.any === selectedYear);
+    // Filtrar per anys >= 2011 quan es selecciona 'all'
+    const filt = selectedYear === 'all' 
+        ? rawData.filter(d => parseInt(d.any) >= 2011) 
+        : rawData.filter(d => d.any === selectedYear);
     const counts = new Array(12).fill(0);
     filt.forEach(d => { counts[parseInt(d.mes, 10) - 1]++; });
     
@@ -369,7 +367,7 @@ function drawMonthChart(selectedYear='all'){
         data:{ 
             labels:mesosNom, 
             datasets:[{ 
-                label: selectedYear==='all'?'Tots els anys':`Any ${selectedYear}`, 
+                label: selectedYear === 'all' ? '2011 - Actual' : `Any ${selectedYear}`, 
                 data:counts, 
                 borderColor:'rgba(159, 50, 34, 0.9)', 
                 backgroundColor: 'rgba(159, 50, 34, 0.1)', 
@@ -396,8 +394,9 @@ function drawMonthChart(selectedYear='all'){
 }
 
 function drawEventTypeChart(selectedYear='all') {
+    // Filtrar per anys >= 2011 quan es selecciona 'all'
     const filteredData = selectedYear === 'all' 
-        ? rawData 
+        ? rawData.filter(d => parseInt(d.any) >= 2011) 
         : rawData.filter(d => d.any === selectedYear);
     
     const typeCounts = {};
@@ -461,7 +460,7 @@ function drawEventTypeChart(selectedYear='all') {
                 legend: { display: false },
                 title: {
                     display: true,
-                    text: `Tipus d'esdeveniments ${selectedYear === 'all' ? '(tots els anys)' : `(${selectedYear})`}`
+                    text: `Tipus d'esdeveniments ${selectedYear === 'all' ? '(2011 - Actual)' : `(${selectedYear})`}`
                 }
             },
             scales: {
